@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion : '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Creates a Lambda to call from CodePipeline to modify artifacts
+Resources:
+
+  # Create the lambda fn
+  ModifySourceLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CodepipelineModifySource
+      Description: 'Modify input artifact by extracting zip files passed in UserParameters'
+      Runtime: go1.x
+      Handler: handler
+      Policies:
+        - CodePipelineLambdaExecutionPolicy: {}
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - 's3:*'
+              Resource: '*'
+
+  # Allow any codepipeline in this account to invoke this lambda
+  ModifySourceLambdaPipelineInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref ModifySourceLambda
+      Principal: 'codepipeline.amazonaws.com'
+      SourceAccount: !Ref AWS::AccountId
+
+Outputs:
+
+  # Export the name of the lambda
+  ModifySourceLambdaFnName:
+    Value: !Ref ModifySourceLambda
+    Exports:
+      Name: ModifySourceLambdaFnName
