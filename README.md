@@ -20,11 +20,28 @@ As a stage in a Codepipeline:
                 Provider: Lambda
                 Version: 1
               Configuration:
-                FunctionName: !ImportValue 'ModifySourceLambdaFnName'
+                FunctionName: ModifySourceArtifactLambda
                 UserParameters: 'mybucket/files.zip'
               InputArtifacts:
                 - Name: Source
               OutputArtifacts:
                 - Name: ModifiedSource
               RunOrder: 1
+```
+
+Your pipeline will also need the permissions to invoke the function:
+
+```yaml
+              - Effect: 'Allow'
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                Resource:
+                  - !Sub 'arn:aws:s3:::<BUCKET_NAME>'
+                  - !Sub 'arn:aws:s3:::<BUCKET_NAME>/*'
+              - Effect: 'Allow'
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource:
+                  - 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:ModifySourceArtifactLambda'
 ```

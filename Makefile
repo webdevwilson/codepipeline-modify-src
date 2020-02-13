@@ -1,10 +1,10 @@
 INSTALL_PKG := install.pkg.yaml
 
 clean:
-	rm $(INSTALL_PKG)
+	rm -f $(INSTALL_PKG) handler
 
 handler:
-	go build handler
+	go build handler.go
 
 $(INSTALL_PKG):
 	aws cloudformation package \
