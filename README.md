@@ -1,6 +1,7 @@
 # codepipeline-modify-src
 
-Allows you to modify artifacts in a code pipeline build.
+Allows you to modify artifacts in a CodePipeline build. This enables you to share
+common files between projects (like buildspecs, for example).
 
 # Installing
 
@@ -8,7 +9,10 @@ Allows you to modify artifacts in a code pipeline build.
 
 # Usage
 
-As a stage in a Codepipeline:
+Call the pipeline as a stage in a CodePipeline, passing in the bucket and key of a zip file.
+The zip file will be extracted inside the input artifact and output.
+
+In CloudFormation:
 
 ```yaml
         - Name: Build
@@ -21,7 +25,7 @@ As a stage in a Codepipeline:
                 Version: 1
               Configuration:
                 FunctionName: ModifySourceArtifactLambda
-                UserParameters: 'mybucket/files.zip'
+                UserParameters: '<bucketname>/<myfile>.zip'
               InputArtifacts:
                 - Name: Source
               OutputArtifacts:
