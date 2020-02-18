@@ -24,13 +24,12 @@ var s3Svc = s3.New(s)
 
 func handler(event events.CodePipelineEvent) {
 
-	// recover from panics
+	// attempt to gracefully recovery from panics
 	defer func() {
 		if r := recover(); r != nil {
 			var err = fmt.Errorf("panic: %v", r)
-			var msg = fmt.Sprintf("%v", err)
 			log.Printf("panic: %v", r)
-			jobFailure(&event.CodePipelineJob.ID, &msg)
+			jobFailure(&event.CodePipelineJob.ID, err)
 		}
 	}()
 
@@ -55,45 +54,65 @@ func handler(event events.CodePipelineEvent) {
 	// pull the artifact and add to zip file
 	var artifact = event.CodePipelineJob.Data.InputArtifacts[0].Location.S3Location
 	log.Printf("Pulling source artifact from S3: %s %s", artifact.BucketName, artifact.ObjectKey)
-	addS3FilesToZip(pipelineS3Svc, &artifact.BucketName, &artifact.ObjectKey, dest)
+	err = addS3FilesToZip(pipelineS3Svc, &artifact.BucketName, &artifact.ObjectKey, dest)
+	if err != nil {
+		jobFailure(&event.CodePipelineJob.ID, err)
+		return
+	}
 
 	// read the zip overlay from the user parameters and write to a temporary file
 	var bucket, key = getBucketAndKey(event.CodePipelineJob.Data.ActionConfiguration.Configuration.UserParameters)
 	log.Printf("Pulling overlay from S3: %s %s", bucket, key)
 
-	addS3FilesToZip(s3Svc, &bucket, &key, dest)
+	err = addS3FilesToZip(s3Svc, &bucket, &key, dest)
+	if err != nil {
+		jobFailure(&event.CodePipelineJob.ID, err)
+		return
+	}
 
 	log.Printf("Writing zip file")
 
 	err = dest.Close()
 	if err != nil {
-		panic(err)
+		jobFailure(&event.CodePipelineJob.ID, err)
+		return
 	}
 
 	err = tmpFile.Close()
 	if err != nil {
-		panic(err)
+		jobFailure(&event.CodePipelineJob.ID, err)
+		return
 	}
 
 	tmpFile, err = os.Open(tmpFile.Name())
 	if err != nil {
-		panic(err)
+		jobFailure(&event.CodePipelineJob.ID, err)
+		return
 	}
 
 	// upload output artifacts
 	var outputS3 = event.CodePipelineJob.Data.OutPutArtifacts[0].Location.S3Location
 	log.Printf("Uploading output artifacts to S3: %s %s", outputS3.ObjectKey, outputS3.BucketName)
-	pipelineS3Svc.PutObject(&s3.PutObjectInput{
+	_, err = pipelineS3Svc.PutObject(&s3.PutObjectInput{
 		Body: tmpFile,
 		Key: &outputS3.ObjectKey,
 		Bucket: &outputS3.BucketName,
 	})
 
+	if err != nil {
+		jobFailure(&event.CodePipelineJob.ID, err)
+		return
+	}
+
 	// upload job success
 	log.Printf("Job successful")
-	codepipelineSvc.PutJobSuccessResult(&codepipeline.PutJobSuccessResultInput{
+	_, err = codepipelineSvc.PutJobSuccessResult(&codepipeline.PutJobSuccessResultInput{
 		JobId: &event.CodePipelineJob.ID,
 	})
+
+	if err != nil {
+		log.Printf("Error reporting job success: %s", err)
+	}
 }
 
 func createS3Svc(creds events.CodePipelineArtifactCredentials) *s3.S3 {
@@ -103,77 +122,95 @@ func createS3Svc(creds events.CodePipelineArtifactCredentials) *s3.S3 {
 	return s3.New(pipelineSession)
 }
 
-func addS3FilesToZip(svc *s3.S3, bucket *string, key *string, dest *zip.Writer) {
-	var f = readZipFileFromS3(svc, bucket, key)
-	var src, err = zip.OpenReader(f)
+func addS3FilesToZip(svc *s3.S3, bucket *string, key *string, dest *zip.Writer) error {
+	var f, err = readZipFileFromS3(svc, bucket, key)
 
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	addFilesToZip(src, dest)
+	var src *zip.ReadCloser
+	src, err = zip.OpenReader(f)
+
+	if err != nil {
+		return err
+	}
+
+	err = addFilesToZip(src, dest)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func readZipFileFromS3(svc *s3.S3, bucket *string, key *string) string {
+func readZipFileFromS3(svc *s3.S3, bucket *string, key *string) (string, error) {
 	resp, err := svc.GetObject(&s3.GetObjectInput{
 		Bucket: bucket,
 		Key: key,
 	})
 
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	file, err := ioutil.TempFile("", "*")
-	defer file.Close()
 
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	_, err = io.Copy(file, resp.Body)
 
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
-	return file.Name()
+	return file.Name(), file.Close()
 }
 
-func addFilesToZip(src *zip.ReadCloser, dest *zip.Writer) {
+func addFilesToZip(src *zip.ReadCloser, dest *zip.Writer) error {
 	for _, f := range src.File {
-		addFileToZip(f, dest)
+		err := addFileToZip(f, dest)
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
-func addFileToZip(src *zip.File, dest *zip.Writer) {
+func addFileToZip(src *zip.File, dest *zip.Writer) error {
 
 	// create the zip header
 	header, err := zip.FileInfoHeader(src.FileInfo())
 	if err != nil {
-		panic(err)
+		return err
 	}
+
 	header.Name = src.Name
 	header.Method = zip.Deflate
 
 	// create the header
 	writer, err := dest.CreateHeader(header)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// open the reader for the source
 	srcReader, err := src.Open()
-	defer srcReader.Close()
+
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// copy file into zip
 	_, err = io.Copy(writer, srcReader)
 	if err != nil {
-		panic(err)
+		return err
 	}
+
+	return srcReader.Close()
 }
 
 // return the bucket, and key from the string
@@ -182,14 +219,18 @@ func getBucketAndKey(path string) (string, string) {
 	return parts[0], strings.Join(parts[1:], "/")
 }
 
-func jobFailure(jobId *string, msg *string) {
-	codepipelineSvc.PutJobFailureResult(&codepipeline.PutJobFailureResultInput{
+func jobFailure(jobId *string, err error) {
+	msg := fmt.Sprintf("Job Failure: %v", err)
+	log.Println(msg)
+	_, err = codepipelineSvc.PutJobFailureResult(&codepipeline.PutJobFailureResultInput{
 		FailureDetails: &codepipeline.FailureDetails{
-			Message:             msg,
+			Message:             &msg,
 			Type:                nil,
 		},
 		JobId: jobId,
 	})
+
+	log.Printf("Error reporting job failure: %s", err)
 }
 
 func main() {

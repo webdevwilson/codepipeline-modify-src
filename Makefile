@@ -4,7 +4,7 @@ clean:
 	rm -f $(INSTALL_PKG) handler
 
 handler:
-	go build handler.go
+	GOOS=linux GOARCH=amd64 go build handler.go
 
 $(INSTALL_PKG):
 	aws cloudformation package \
